@@ -2173,6 +2173,18 @@ static bool should_propagate_to_submounts(const MountEntry *m) {
         return !IN_SET(m->mode, MOUNT_EMPTY_DIR, MOUNT_TMPFS, MOUNT_PRIVATE_TMPFS);
 }
 
+static bool deny_list_has_children(char **deny_list, const char *path) {
+        /* Check if any deny_list entry is a proper child of path. If not, the deny_list
+         * is irrelevant for a recursive remount of this path, and we can pass NULL to
+         * unlock the mount_setattr(AT_RECURSIVE) fast path in bind_remount_recursive. */
+        STRV_FOREACH(e, deny_list) {
+                const char *suffix = path_startswith(*e, path);
+                if (suffix && !isempty(suffix))
+                        return true;
+        }
+        return false;
+}
+
 static int make_read_only(const MountEntry *m, char **deny_list, FILE *proc_self_mountinfo) {
         unsigned long new_flags = 0, flags_mask = 0;
         bool submounts;
@@ -2203,7 +2215,10 @@ static int make_read_only(const MountEntry *m, char **deny_list, FILE *proc_self
          * and running Linux <= 4.17. */
         submounts = mount_entry_read_only(m) && should_propagate_to_submounts(m);
         if (submounts)
-                r = bind_remount_recursive_with_mountinfo(mount_entry_path(m), new_flags, flags_mask, deny_list, proc_self_mountinfo);
+                r = bind_remount_recursive_with_mountinfo(
+                                mount_entry_path(m), new_flags, flags_mask,
+                                deny_list_has_children(deny_list, mount_entry_path(m)) ? deny_list : NULL,
+                                proc_self_mountinfo);
         else
                 r = bind_remount_one_with_mountinfo(mount_entry_path(m), new_flags, flags_mask, proc_self_mountinfo);
 
@@ -2243,7 +2258,10 @@ static int make_noexec(const MountEntry *m, char **deny_list, FILE *proc_self_mo
 
         submounts = should_propagate_to_submounts(m);
         if (submounts)
-                r = bind_remount_recursive_with_mountinfo(mount_entry_path(m), new_flags, flags_mask, deny_list, proc_self_mountinfo);
+                r = bind_remount_recursive_with_mountinfo(
+                                mount_entry_path(m), new_flags, flags_mask,
+                                deny_list_has_children(deny_list, mount_entry_path(m)) ? deny_list : NULL,
+                                proc_self_mountinfo);
         else
                 r = bind_remount_one_with_mountinfo(mount_entry_path(m), new_flags, flags_mask, proc_self_mountinfo);
 
